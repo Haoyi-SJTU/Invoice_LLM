@@ -13,7 +13,8 @@ import json
 import requests
 from PyQt6.QtWidgets import QApplication, QMessageBox
 import json
-
+from PIL import Image
+import io
 
 class InvoiceProcessorApp(QMainWindow):
     def __init__(self):
@@ -286,10 +287,26 @@ class InvoiceProcessorApp(QMainWindow):
 
         # 转Base64
         try:
-            with open(target_file_to_encode, "rb") as file_data:
-                base64_file = base64.b64encode(file_data.read()).decode('utf-8')
+            with Image.open(target_file_to_encode) as img:
+                # 统一转换为 RGB 模式，避免 PNG 透明通道带来的额外体积
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # 设定最大边长（发票 OCR 推荐 1280，既能看清小字，又能大幅降低 Token）
+                # 手机拍的原图通常在 3000px 以上，压缩后 Token 消耗可降低 60%~80%
+                max_size = 1280 
+                if img.width > max_size or img.height > max_size:
+                    # thumbnail 会等比例缩小图片，不会导致变形
+                    img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+                
+                # 将压缩后的图像存入内存缓冲区
+                buffered = io.BytesIO()
+                # 使用 JPEG 格式并稍微降低质量（85），减小网络传输负担
+                img.save(buffered, format="JPEG", quality=85)
+                base64_file = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                mime_type = "image/jpeg" # 强制统一声明为 JPEG
         except Exception as e:
-            QMessageBox.critical(self, "文件错误", f"无法读取文件进行编码：{e}")
+            QMessageBox.critical(self, "文件处理错误", f"图片压缩或编码失败：\n{e}")
             self.btn_skip.setEnabled(True)
             return
 
@@ -304,16 +321,7 @@ class InvoiceProcessorApp(QMainWindow):
 
         fields_str = "、".join(fields_to_extract)
         
-        prompt = f"""
-        你是一个专业的财务发票数据提取助手。
-        请从提供的文件中提取以下字段信息：{fields_str}。
-        
-        严格要求：
-        1. 严格以 JSON 格式输出，不要包含任何额外的问候语或 Markdown 标记（如 ```json ）。
-        2. JSON 的键名必须完全使用上述提取的字段名称。如果未找到请填"未找到"。
-        3. 若要求提取“项目名称”，只提取发票上项目明细的【第一行】即可，舍弃多余的行数。
-        4. 若要求提取“总金额”，必须去读取发票上的【价税合计（大写）】，并将其转换为【阿拉伯数字】输出（如将"壹佰圆整"输出为"100.00"）。
-        """
+        prompt = f"提取发票字段:{fields_str}。严格输出纯JSON，无Markdown标记。找不到填'未找到'。'项目名称'仅取明细第一行。'总金额'读取【价税合计(大写)】转阿拉伯数字(如'100.00')。"
         
         url = self.base_url
         
