@@ -1,6 +1,6 @@
 import sys
 import os
-import fitz  # PyMuPDF
+import fitz
 import pandas as pd
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, 
@@ -11,18 +11,20 @@ from PyQt6.QtCore import Qt
 import base64
 import json
 import requests
-from PyQt6.QtWidgets import QApplication, QMessageBox # 确保引入了这些用于更新UI和弹窗的组件
+from PyQt6.QtWidgets import QApplication, QMessageBox
+import json
+
 
 class InvoiceProcessorApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("大模型发票智能处理系统")
-        self.resize(1100, 750)
+        self.setWindowTitle("发票智能处理系统")
+        self.setFixedSize(1000, 500)
         
-        self.target_files = []      # 存放待处理的文件列表 (支持 PDF 和 图片)
+        self.target_files = []      # 待处理的文件列表
         self.current_index = 0      # 当前处理的索引
-        self.results_data = []      # 暂存已确认的数据，最后统一写入Excel
-        self.current_image_path = "temp_invoice.png" # 用于在UI上显示PDF截图
+        self.results_data = []      # 已确认的数据
+        self.current_image_path = "temp_invoice.png" # UI显示
         
         self.init_ui()
         
@@ -30,27 +32,19 @@ class InvoiceProcessorApp(QMainWindow):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         
-        # 核心调整：最外层改为垂直布局
         root_layout = QVBoxLayout(main_widget)
-        
-        # 创建一个水平布局，用于包裹原本的左右两块核心内容
+
         content_layout = QHBoxLayout()
         
-        # --- 左侧：图像显示 ---
+        # 图像显示
         left_layout = QVBoxLayout()
         
-        # 进度提示文本框
-        self.progress_label = QLabel("共找到 0 张，当前处理第 0 张")
-        self.progress_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #333;")
-        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        left_layout.addWidget(self.progress_label)
-
         self.image_label = QLabel("发票预览将显示在这里")
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.setStyleSheet("border: 1px solid black; background-color: #f0f0f0;")
         left_layout.addWidget(self.image_label)
         
-        # --- 右侧：控制与数据表单 ---
+        # 控制与数据表单
         right_layout = QVBoxLayout()
         
         # 1. 操作区
@@ -59,7 +53,7 @@ class InvoiceProcessorApp(QMainWindow):
         self.btn_select_dir.clicked.connect(self.load_folder)
         right_layout.addWidget(self.btn_select_dir)
         
-# ==================== 2 & 3. 合并后的字段选择与数据修改区 ====================
+        #  2. 字段选择与数据修改区
         self.fields_layout = QGridLayout()
         self.fields_layout.setVerticalSpacing(15) # 设置行间距让界面更舒展
         
@@ -95,23 +89,30 @@ class InvoiceProcessorApp(QMainWindow):
         self.fields_layout.addWidget(QLabel("开票日期:"), 3, 1)
         self.fields_layout.addWidget(self.input_date, 3, 2)
 
+        # 4. 项目名称
+        self.chk_project = QCheckBox()
+        self.chk_project.setChecked(True)
+        self.input_project = QLineEdit()
+        self.fields_layout.addWidget(self.chk_project, 4, 0)
+        self.fields_layout.addWidget(QLabel("项目名称:"), 4, 1)
+        self.fields_layout.addWidget(self.input_project, 4, 2)
+
         # 5. 总金额
         self.chk_amount = QCheckBox()
         self.chk_amount.setChecked(True)
         self.input_amount = QLineEdit()
-        self.fields_layout.addWidget(self.chk_amount, 4, 0)
-        self.fields_layout.addWidget(QLabel("总金额:"), 4, 1)
-        self.fields_layout.addWidget(self.input_amount, 4, 2)
+        self.fields_layout.addWidget(self.chk_amount, 5, 0)
+        self.fields_layout.addWidget(QLabel("总金额:"), 5, 1)
+        self.fields_layout.addWidget(self.input_amount, 5, 2)
 
-        # 设置列宽比例，让输入框占据大部分空间
+        # 列宽比例
         self.fields_layout.setColumnStretch(0, 0) # 复选框列
         self.fields_layout.setColumnStretch(1, 0) # 标签列
         self.fields_layout.setColumnStretch(2, 1) # 输入框列延展
 
         right_layout.addLayout(self.fields_layout)
-        # =========================================================================
-        
-        # 4. 底部控制按钮区 (水平布局)
+       
+        # 4. 底部控制按钮区
         btn_layout = QHBoxLayout()
 
         self.btn_confirm = QPushButton("确认并处理下一张")
@@ -124,7 +125,7 @@ class InvoiceProcessorApp(QMainWindow):
         self.btn_skip.clicked.connect(self.skip_invoice)
         self.btn_skip.setEnabled(False)
 
-        self.btn_end = QPushButton("结束并写入EXCEL")
+        self.btn_end = QPushButton("结束")
         self.btn_end.setStyleSheet("background-color: #F44336; color: white; font-weight: bold; padding: 10px;")
         self.btn_end.clicked.connect(self.end_processing)
 
@@ -134,22 +135,80 @@ class InvoiceProcessorApp(QMainWindow):
         right_layout.addLayout(btn_layout)
         right_layout.addWidget(self.btn_end)
         
-        # 将左右两块加入包裹布局中
+
         content_layout.addLayout(left_layout, 5)  
         content_layout.addLayout(right_layout, 3)
         
-        # 将核心内容区域加入最外层布局
         root_layout.addLayout(content_layout)
         
+        self.progress_label = QLabel("共找到 0 张，当前处理第 0 张")
+        line_height = self.progress_label.fontMetrics().height()
+        self.progress_label.setFixedHeight(int(line_height * 1.5)) # 限制高度
+        self.progress_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #333;")
+        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        left_layout.addWidget(self.progress_label) 
+
         # 进度条
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        self.progress_bar.setFixedHeight(20) # 限制高度，使其更像底部的状态栏
+        self.progress_bar.setFixedHeight(20) 
         self.progress_bar.setStyleSheet("QProgressBar { border: 1px solid #ccc; border-radius: 3px; text-align: center; } QProgressBar::chunk { background-color: #4CAF50; }")
-        
         root_layout.addWidget(self.progress_bar)
 
+
+        self.name_label = QLabel("作者：https://github.com/Haoyi-SJTU")
+        line_height = self.name_label.fontMetrics().height()
+        self.name_label.setFixedHeight(int(line_height * 1.5)) 
+        self.name_label.setStyleSheet("font-size: 10px; color: #333;")
+        self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root_layout.addWidget(self.name_label) 
+        
+        self.load_api()
+        
+    def load_api(self):
+        key_path = "key.txt"
+        if not os.path.exists(key_path):
+            QMessageBox.critical(self, "缺少API Key", "请在软件同级目录下创建一个 key.txt 文件，并将您的 API Key 粘贴进去！")
+            self.btn_skip.setEnabled(True)
+            return
+            
+        with open(key_path, "r", encoding="utf-8") as f:
+            self.api_key = f.read().strip()
+            
+        if not self.api_key:
+            QMessageBox.critical(self, "API Key无效", "key.txt 文件为空，请填入有效的 API Key！")
+            self.btn_skip.setEnabled(True)
+            return
+
+    def load_api(self):
+        key_path = "key.json"
+        if not os.path.exists(key_path):
+            QMessageBox.critical(self, "缺少配置文件", "请在软件同级目录下创建一个 key.json 文件，并配置大模型的 key 和 link！")
+            self.btn_skip.setEnabled(True)
+            return
+            
+        try:
+            with open(key_path, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+                
+            # 使用 get 方法安全获取字典内容，防止抛出 KeyError
+            self.api_key = config_data.get("key", "").strip()
+            self.base_url = config_data.get("link", "").strip()
+            
+            if not self.api_key or not self.base_url:
+                QMessageBox.critical(self, "配置无效", "key.json 文件中缺少 'key' 或 'link' 字段，或者字段内容为空！")
+                self.btn_skip.setEnabled(True)
+                return
+                
+        except json.JSONDecodeError:
+            QMessageBox.critical(self, "格式错误", "key.json 文件格式不正确，请确保它符合标准的 JSON 格式要求（如使用双引号）。")
+            self.btn_skip.setEnabled(True)
+            return
+        except Exception as e:
+            QMessageBox.critical(self, "读取错误", f"读取配置文件时发生未知错误：\n{str(e)}")
+            self.btn_skip.setEnabled(True)
+            return
 
     def update_progress_label(self):
         total = len(self.target_files)
@@ -161,8 +220,8 @@ class InvoiceProcessorApp(QMainWindow):
 
     def load_folder(self):
         folder_path = QFileDialog.getExistingDirectory(self, "选择包含发票的文件夹")
+
         if folder_path:
-            # 扩展支持 PDF 和常见图像格式
             valid_exts = ('.pdf', '.png', '.jpg', '.jpeg')
             self.target_files = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.lower().endswith(valid_exts)]
             self.current_index = 0
@@ -177,52 +236,55 @@ class InvoiceProcessorApp(QMainWindow):
                 self.progress_label.setText("共找到 0 张，当前处理第 0 张")
 
     def process_current_invoice(self):
+
+        self.btn_confirm.setEnabled(False)
+        self.btn_skip.setEnabled(False)
+
         self.update_progress_label()
 
         if self.current_index >= len(self.target_files):
             QMessageBox.information(self, "完成", "所有发票处理完毕，请点击“结束并写入EXCEL”。")
-            self.image_label.setText("处理完成")
+            self.setWindowTitle("发票智能处理系统 - 完成")
             self.btn_confirm.setEnabled(False)
             self.btn_skip.setEnabled(False)
             return
 
         file_path = self.target_files[self.current_index]
         
-        # --- UI 预览显示逻辑 ---
+        # UI 
         if file_path.lower().endswith('.pdf'):
-            # 对于PDF，仅使用 fitz 截图用于 UI 显示
             doc = fitz.open(file_path)
             page = doc[0] # 取第一页
             pix = page.get_pixmap(dpi=150)
             pix.save(self.current_image_path)
             pixmap = QPixmap(self.current_image_path)
         else:
-            # 对于图像文件，直接读取显示
             pixmap = QPixmap(file_path)
 
         self.image_label.setPixmap(pixmap.scaled(self.image_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         
-        #  将原生文件传递给大模型
         self.call_llm_api(file_path)
-        
+
+
+
+
     def call_llm_api(self, file_path):
+
         self.btn_confirm.setEnabled(False)
         self.btn_skip.setEnabled(False)
-        self.image_label.setText("正在调用大模型识别，请稍候...")
-        QApplication.processEvents() # 强制刷新界面
+        self.setWindowTitle("发票智能处理系统 - 正在处理，请稍候")
+        QApplication.processEvents() # 刷新界面
         
-        # 判断应当发送给大模型的究竟是哪个文件
         if file_path.lower().endswith('.pdf'):
             target_file_to_encode = self.current_image_path
             mime_type = "image/png"
             print("识别到PDF文件，正在读取其渲染图...")
         else:
-            # 如果是图像文件，直接发送原文件
             target_file_to_encode = file_path
             mime_type = "image/png" if file_path.lower().endswith('.png') else "image/jpeg"
             print(f"识别到图像文件，正在读取原生文件: {file_path}")
 
-        # 将目标文件转换为 Base64
+        # 转Base64
         try:
             with open(target_file_to_encode, "rb") as file_data:
                 base64_file = base64.b64encode(file_data.read()).decode('utf-8')
@@ -231,10 +293,11 @@ class InvoiceProcessorApp(QMainWindow):
             self.btn_skip.setEnabled(True)
             return
 
-        # 2. 根据界面上勾选的复选框动态生成请求
+        # 构造请求字段
         fields_to_extract = []
         if self.chk_buyer.isChecked(): fields_to_extract.append("购买方")
         if self.chk_tax_id.isChecked(): fields_to_extract.append("税号")
+        if self.chk_project.isChecked(): fields_to_extract.append("项目名称") 
         if self.chk_invoice_id.isChecked(): fields_to_extract.append("发票号码")
         if self.chk_date.isChecked(): fields_to_extract.append("开票日期")
         if self.chk_amount.isChecked(): fields_to_extract.append("总金额")
@@ -245,38 +308,28 @@ class InvoiceProcessorApp(QMainWindow):
         你是一个专业的财务发票数据提取助手。
         请从提供的文件中提取以下字段信息：{fields_str}。
         
-        要求：
-        1. 严格以 JSON 格式输出，不要包含任何额外的问候语、解释性文本或 Markdown 代码块标记（如 ```json ）。
-        2. JSON 的键名必须严格使用上述要求提取的字段名称。
-        3. 如果某个字段在发票中完全找不到，请将该字段的值设置为 "未找到"。
+        严格要求：
+        1. 严格以 JSON 格式输出，不要包含任何额外的问候语或 Markdown 标记（如 ```json ）。
+        2. JSON 的键名必须完全使用上述提取的字段名称。如果未找到请填"未找到"。
+        3. 若要求提取“项目名称”，只提取发票上项目明细的【第一行】即可，舍弃多余的行数。
+        4. 若要求提取“总金额”，必须去读取发票上的【价税合计（大写）】，并将其转换为【阿拉伯数字】输出（如将"壹佰圆整"输出为"100.00"）。
         """
-
-        url = "https://models.sjtu.edu.cn/api/v1/chat/completions" 
-        # url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+        
+        url = self.base_url
+        
         headers = {
             "Content-Type": "application/json",
-            "Authorization": "Bearer XXXXX"  # API KEY
-            # "Authorization": "Bearer "  # API KEY
+            "Authorization": f"Bearer {self.api_key}"  
         }
         
         data = {
-            "model": "qwen3vl", 
-            # "model": "qwen-vl-ocr-latest",
+            "model": "qwen-vl-ocr-latest", 
             "messages": [
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "image_url", 
-                            "image_url": {
-                                # 传入原生文件的 Base64 及其正确格式
-                                "url": f"data:{mime_type};base64,{base64_file}" 
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": prompt 
-                        }
+                        {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{base64_file}"}},
+                        {"type": "text", "text": prompt}
                     ]
                 }
             ],
@@ -284,97 +337,116 @@ class InvoiceProcessorApp(QMainWindow):
             "temperature": 0.1 
         }
 
-        # 5. 发送请求并解析结果
         try:
-            print("正在等待大模型返回结果...")
-            response = requests.post(url, headers=headers, json=data) # [cite: 11]
-            response.raise_for_status()  # 如果遇到 4xx 或 5xx 错误会抛出异常
-            
+            response = requests.post(url, headers=headers, json=data) 
+            response.raise_for_status() 
             result = response.json()
-            content = result['choices'][0]['message']['content'].strip() # 获取大模型回复的具体文本 [cite: 3, 11]
+            content = result['choices'][0]['message']['content'].strip() 
             
-            # 容错处理：清理大模型偶尔不听话带上的 Markdown 标记
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.startswith("```"):
-                content = content[3:]
-            if content.endswith("```"):
-                content = content[:-3]
-            content = content.strip()
-            
-            print(f"大模型原始返回: \n{content}")
-            
-            # 解析为 Python 字典
+            content = content.replace("```json", "").replace("```", "").strip()
             parsed_data = json.loads(content)
+
+            mapping = {
+                "buyer": "购买方",
+                "tax_id": "税号",
+                "project": "项目名称", 
+                "invoice_id": "发票号码",
+                "date": "开票日期",
+                "amount": "总金额"
+            }            
             
-            # 6. 将提取到的数据填充回图形界面的输入框中
-            self.input_buyer.setText(parsed_data.get("购买方", "未找到"))
-            self.input_tax_id.setText(parsed_data.get("税号", "未找到"))
-            self.input_invoice_id.setText(parsed_data.get("发票号码", "未找到"))
-            self.input_date.setText(parsed_data.get("开票日期", "未找到"))
-            self.input_amount.setText(parsed_data.get("总金额", "未找到"))
-            
-            # 恢复界面状态
+            for attr, json_key in mapping.items():
+                checkbox = getattr(self, f"chk_{attr}")
+                input_box = getattr(self, f"input_{attr}")
+                if checkbox.isChecked():
+                    input_box.setText(str(parsed_data.get(json_key, "未找到")))
+                else:
+                    input_box.clear()
+
             self.btn_confirm.setEnabled(True)
-            # QMessageBox.information(self, "成功", "识别完成，请核对数据！")
+            self.btn_skip.setEnabled(True)        
+            self.setWindowTitle("发票智能处理系统")
 
         except json.JSONDecodeError:
             QMessageBox.warning(self, "解析失败", "大模型未返回标准的JSON格式数据，请重试。\n返回内容：\n" + content)
             self.btn_confirm.setEnabled(True)
+            self.btn_skip.setEnabled(True) 
+            self.setWindowTitle("发票智能处理系统")
         except Exception as e:
-            QMessageBox.critical(self, "API调用错误", f"请求失败（请确保已连接校内网络并填对API Key ）：\n{str(e)}")
+            err_msg = str(e)
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    err_json = e.response.json()
+                    if 'error' in err_json and 'message' in err_json['error']:
+                        err_msg += f"\n详细原因: {err_json['error']['message']}"
+                except:
+                    err_msg += f"\n详细原因: {e.response.text}"
+            
+            QMessageBox.critical(self, "API调用错误", f"请求失败：\n{err_msg}")
             self.btn_confirm.setEnabled(True)
+            self.btn_skip.setEnabled(True) 
+            self.setWindowTitle("发票智能处理系统")
+
 
     def save_and_next(self):
+
+        self.btn_confirm.setEnabled(False)
+        self.btn_skip.setEnabled(False)
+
         # 1. 获取界面上（可能被用户修改过）的最终数据
         data = {
             "购买方": self.input_buyer.text(),
             "税号": self.input_tax_id.text(),
             "发票号码": self.input_invoice_id.text(),
             "开票日期": self.input_date.text(),
+            "项目名称": self.input_project.text(),
             "总金额": self.input_amount.text()
         }
         
-        # 2. 追加到 Excel
+        # 2. 追加写入 Excel
+        excel_path = "发票汇总.xlsx"
         df = pd.DataFrame([data])
-        excel_path = "发票汇总.xlsx"
-        if not os.path.exists(excel_path):
-            df.to_excel(excel_path, index=False)
-        else:
-            with pd.ExcelWriter(excel_path, mode='a', engine='openpyxl', if_sheet_exists='overlay') as writer:
-                df.to_excel(writer, index=False, header=False, startrow=writer.sheets['Sheet1'].max_row)
-        
-        # 3. 处理下一张
-        self.current_index += 1
-        self.process_current_invoice()
-
-    def skip_invoice(self):
-        # 放弃当前数据，清空输入框，直接处理下一张
-        self.clear_inputs()
-        self.current_index += 1
-        self.process_current_invoice()
-
-    def end_processing(self):
-        # 将积累的所有结果一次性写入Excel并退出
-        if not self.results_data:
-            QMessageBox.information(self, "退出", "没有保存任何发票数据，程序退出。")
-            self.close()
-            return
-            
-        df = pd.DataFrame(self.results_data)
-        excel_path = "发票汇总.xlsx"
-        
         try:
             if not os.path.exists(excel_path):
                 df.to_excel(excel_path, index=False)
             else:
                 with pd.ExcelWriter(excel_path, mode='a', engine='openpyxl', if_sheet_exists='overlay') as writer:
-                    df.to_excel(writer, index=False, header=False, startrow=writer.sheets['Sheet1'].max_row)
-            
-            QMessageBox.information(self, "保存成功", f"共处理并保存了 {len(self.results_data)} 条数据至 {excel_path}！")
-            self.close() # 退出程序
+                    start_row = writer.book['Sheet1'].max_row
+                    df.to_excel(writer, index=False, header=False, startrow=start_row)
+            print(f"数据已写入")
         except Exception as e:
-            QMessageBox.critical(self, "保存失败", f"写入 Excel 时出错，请确认文件是否被占用：\n{e}")
+            QMessageBox.critical(self, "写入错误", f"无法写入Excel文件，请检查是否被其他程序占用：\n{e}")
+            self.btn_confirm.setEnabled(True)
+            self.btn_skip.setEnabled(True)
+            return
+
+        # 3. 清空输入框并进入下一张
+        self.clear_inputs()
+        self.current_index += 1
+        self.process_current_invoice()
+
+    def clear_inputs(self):
+        self.input_buyer.clear()
+        self.input_tax_id.clear()
+        self.input_invoice_id.clear()
+        self.input_date.clear()
+        self.input_amount.clear()
+
+    def skip_invoice(self):
+        self.clear_inputs()
+        self.current_index += 1
+        self.process_current_invoice()
+
+    def end_processing(self):
+        msg = f"处理已结束。所有点击过“确认”的数据已实时写入表格文件。"
+        QMessageBox.information(self, "退出程序", msg)
+        
+        if os.path.exists(self.current_image_path):
+            try:
+                os.remove(self.current_image_path)
+            except:
+                pass
+        self.close()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
