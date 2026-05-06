@@ -3,6 +3,8 @@
 ![GitHub Version](https://img.shields.io/badge/version-2.0-blue)
 ![Python](https://img.shields.io/badge/python-3.8%2B-brightgreen)
 ![LLM](https://img.shields.io/badge/LLM-Qwen--VL-orange)
+![Downloads](https://img.shields.io/github/downloads/Haoyi-SJTU/Invoice_LLM/total)
+
 
 基于 Python 和 PyQt6 的自动化发票数据提取工具。通过集成阿里云通义千问（Qwen-VL-OCR）大模型，该系统能够自动识别并提取发票中的关键财务信息，并将其导出为结构化的 Excel 表格。
 
